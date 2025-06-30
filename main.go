@@ -34,10 +34,18 @@ func main() {
 	if err != nil {
 		serviceLogger.Fatal().Err(err).Msg("Gagal menginisialisasi tracer")
 	}
-	defer tp.Shutdown(context.Background())
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			serviceLogger.Error().Err(err).Msg("Gagal mematikan tracer provider dengan benar")
+		}
+	}()
 
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-	defer redisClient.Close()
+	defer func() {
+		if err := redisClient.Close(); err != nil {
+			serviceLogger.Error().Err(err).Msg("Gagal menutup koneksi Redis dengan benar")
+		}
+	}()
 
 	notificationClient := notifclient.NewNotificationClient()
 

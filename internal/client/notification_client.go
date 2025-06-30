@@ -65,7 +65,11 @@ func (c *notificationClient) sendNotification(ctx context.Context, payload Notif
 			log.Printf("[ERROR] NotificationClient: Gagal mengirim request ke notification service: %v", err)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				log.Printf("WARN: NotificationClient: Gagal menutup response body: %v", err)
+			}
+		}()
 
 		if resp.StatusCode != http.StatusAccepted {
 			bodyBytes, _ := io.ReadAll(resp.Body)
