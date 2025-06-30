@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/Lumina-Enterprise-Solutions/prism-invitation-service/internal/client"
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
+// ... (struct InvitationData tetap sama) ...
 type InvitationData struct {
 	Email string `json:"email"`
 	Role  string `json:"role"`
@@ -26,19 +26,22 @@ type InvitationService interface {
 type invitationService struct {
 	redisClient        *redis.Client
 	notificationClient client.NotificationClient
+	tokenGenerator     TokenGenerator // <-- TAMBAHKAN INI
 	ttl                time.Duration
 }
 
-func NewInvitationService(redisClient *redis.Client, notificationClient client.NotificationClient, ttlHours int) InvitationService {
+// PERBAIKAN: Konstruktor sekarang menerima TokenGenerator.
+func NewInvitationService(redisClient *redis.Client, notificationClient client.NotificationClient, tokenGen TokenGenerator, ttlHours int) InvitationService {
 	return &invitationService{
 		redisClient:        redisClient,
 		notificationClient: notificationClient,
+		tokenGenerator:     tokenGen, // <-- SIMPAN INI
 		ttl:                time.Hour * time.Duration(ttlHours),
 	}
 }
 
 func (s *invitationService) CreateInvitation(ctx context.Context, email, role string) (string, error) {
-	token := uuid.NewString() // Token yang akan dikirim ke user
+	token := s.tokenGenerator.Generate() // <-- Gunakan generator
 	hash := sha256.Sum256([]byte(token))
 	tokenHash := base64.StdEncoding.EncodeToString(hash[:])
 
@@ -53,13 +56,13 @@ func (s *invitationService) CreateInvitation(ctx context.Context, email, role st
 		return "", err
 	}
 
-	// Kirim email undangan
 	invitationLink := fmt.Sprintf("https://app.prismerp.com/accept-invitation?token=%s", token)
 	s.notificationClient.SendInvitationEmail(ctx, email, invitationLink)
 
 	return token, nil
 }
 
+// ... (ValidateInvitation tetap sama) ...
 func (s *invitationService) ValidateInvitation(ctx context.Context, token string) (*InvitationData, error) {
 	hash := sha256.Sum256([]byte(token))
 	tokenHash := base64.StdEncoding.EncodeToString(hash[:])
@@ -78,9 +81,7 @@ func (s *invitationService) ValidateInvitation(ctx context.Context, token string
 		return nil, fmt.Errorf("gagal unmarshal data undangan: %w", err)
 	}
 
-	// Hapus token setelah berhasil divalidasi
 	if err := s.redisClient.Del(ctx, redisKey).Err(); err != nil {
-		// Log error ini, tapi jangan gagalkan proses utama
 		fmt.Printf("PERINGATAN: gagal menghapus token undangan bekas pakai: %v\n", err)
 	}
 

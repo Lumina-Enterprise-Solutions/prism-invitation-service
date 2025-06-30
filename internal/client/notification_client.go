@@ -10,43 +10,49 @@ import (
 	"time"
 )
 
-// NotificationClient adalah HTTP client untuk berkomunikasi dengan prism-notification-service.
-type NotificationClient struct {
+// Definisikan Interface di sini
+type NotificationClient interface {
+	SendInvitationEmail(ctx context.Context, email, invitationLink string)
+	SendWelcomeEmail(ctx context.Context, userID, email, firstName string)
+}
+
+// Struct sekarang private (huruf kecil)
+type notificationClient struct {
 	httpClient *http.Client
 	baseURL    string
 }
 
-// NewNotificationClient membuat instance baru dari NotificationClient.
-func NewNotificationClient() NotificationClient {
-	// Service discovery name dari Docker Compose
-	baseURL := "http://notification-service:8080"
+// Memastikan `notificationClient` memenuhi interface `NotificationClient`
+var _ NotificationClient = (*notificationClient)(nil)
 
-	return NotificationClient{
+// NewNotificationClient sekarang mengembalikan interface, dan di dalamnya mengembalikan pointer ke struct
+func NewNotificationClient() NotificationClient {
+	baseURL := "http://notification-service:8080"
+	// FIX: Kembalikan pointer ke struct `notificationClient`, bukan struct `NotificationClient` itu sendiri.
+	return NotificationClient(&notificationClient{
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 		baseURL:    baseURL,
-	}
+	})
 }
 
-// NotificationPayload adalah struktur data yang dikirim ke notification-service.
+// (Sisa file tidak perlu diubah)
+
 type NotificationPayload struct {
-	RecipientID  string                 `json:"recipient_id,omitempty"` // ID pengguna, jika ada
-	Recipient    string                 `json:"recipient"`              // Alamat email
+	RecipientID  string                 `json:"recipient_id,omitempty"`
+	Recipient    string                 `json:"recipient"`
 	Subject      string                 `json:"subject"`
 	TemplateName string                 `json:"template_name"`
 	TemplateData map[string]interface{} `json:"template_data"`
 }
 
-// sendNotification adalah fungsi internal untuk mengirim payload secara asinkron.
-func (c *NotificationClient) sendNotification(ctx context.Context, payload NotificationPayload) {
+func (c *notificationClient) sendNotification(ctx context.Context, payload NotificationPayload) {
 	go func() {
-		// Marshal payload ke JSON
 		body, err := json.Marshal(payload)
 		if err != nil {
 			log.Printf("[ERROR] NotificationClient: Gagal marshal payload: %v", err)
 			return
 		}
 
-		// Buat request baru. Menggunakan context.Background() agar tidak dibatalkan oleh context parent.
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.baseURL+"/notifications/send", bytes.NewBuffer(body))
 		if err != nil {
 			log.Printf("[ERROR] NotificationClient: Gagal membuat request: %v", err)
@@ -54,7 +60,6 @@ func (c *NotificationClient) sendNotification(ctx context.Context, payload Notif
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		// Kirim request
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] NotificationClient: Gagal mengirim request ke notification service: %v", err)
@@ -62,7 +67,6 @@ func (c *NotificationClient) sendNotification(ctx context.Context, payload Notif
 		}
 		defer resp.Body.Close()
 
-		// Periksa status response
 		if resp.StatusCode != http.StatusAccepted {
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			log.Printf("[ERROR] NotificationClient: Response tidak terduga dari notification service. Status: %s, Body: %s", resp.Status, string(bodyBytes))
@@ -72,9 +76,7 @@ func (c *NotificationClient) sendNotification(ctx context.Context, payload Notif
 	}()
 }
 
-// SendInvitationEmail adalah method spesifik untuk mengirim email undangan.
-func (c *NotificationClient) SendInvitationEmail(ctx context.Context, email, invitationLink string) {
-	// Template data yang dibutuhkan oleh `invitation.html`
+func (c *notificationClient) SendInvitationEmail(ctx context.Context, email, invitationLink string) {
 	templateData := map[string]interface{}{
 		"InvitationLink": invitationLink,
 		"RecipientEmail": email,
@@ -83,16 +85,13 @@ func (c *NotificationClient) SendInvitationEmail(ctx context.Context, email, inv
 	payload := NotificationPayload{
 		Recipient:    email,
 		Subject:      "Anda Diundang untuk Bergabung dengan Prism ERP",
-		TemplateName: "invitation.html", // Pastikan template ini ada di notification-service
+		TemplateName: "invitation.html",
 		TemplateData: templateData,
 	}
-
 	c.sendNotification(ctx, payload)
 }
 
-// SendWelcomeEmail adalah method yang mungkin akan Anda tambahkan nanti
-// setelah user menyelesaikan pendaftaran via undangan.
-func (c *NotificationClient) SendWelcomeEmail(ctx context.Context, userID, email, firstName string) {
+func (c *notificationClient) SendWelcomeEmail(ctx context.Context, userID, email, firstName string) {
 	payload := NotificationPayload{
 		RecipientID:  userID,
 		Recipient:    email,

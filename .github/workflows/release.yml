@@ -1,0 +1,62 @@
+# .github/workflows/release.yml (FINAL)
+
+name: Publish Invitation Service Release
+
+on:
+  push:
+    tags:
+    - 'v*'
+
+jobs:
+  publish-and-release:
+    name: Publish Docker Image and Create Release
+    runs-on: ubuntu-latest
+
+    # Izin yang diperlukan oleh job
+    permissions:
+      contents: write # Diperlukan untuk membuat GitHub Release
+      packages: write # Diperlukan untuk mem-push image ke GHCR
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }} # Pemilik repo, biasanya organisasi Anda
+        password: ${{ secrets.GITHUB_TOKEN }} # Token otomatis dari GitHub
+
+    - name: Extract Docker metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        # Format nama image: ghcr.io/owner/repo
+        images: ghcr.io/${{ github.repository }}
+
+    - name: Set up QEMU
+      # Berguna untuk build multi-platform di masa depan
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and push Docker image
+      id: build-and-push
+      uses: docker/build-push-action@v6
+      with:
+        context: . # Konteks build adalah root dari repositori ini
+        file: ./Dockerfile
+        push: true # Push image ke registry setelah build
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha # Menggunakan cache dari GitHub Actions
+        cache-to: type=gha,mode=max
+
+    - name: Create GitHub Release
+      # Menggunakan action populer untuk membuat rilis secara otomatis
+      uses: softprops/action-gh-release@v2
+      with:
+        # Otomatis membuat catatan rilis berdasarkan commit messages sejak rilis terakhir
+        generate_release_notes: true

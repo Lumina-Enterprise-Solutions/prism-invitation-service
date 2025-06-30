@@ -1,0 +1,68 @@
+# .github/workflows/ci.yml (FINAL)
+
+name: Invitation Service CI
+
+on:
+  push:
+    branches:
+    - main
+    - develop
+    - 'feature/**'
+    - 'bugfix/**'
+  pull_request:
+    branches:
+    - main
+    - develop
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    # Redis dibutuhkan karena service akan terhubung ke Redis untuk menyimpan token undangan.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+        - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download Go modules
+      run: go mod download
+
+    - name: Run linter
+      uses: golangci/golangci-lint-action@v8
+      with:
+        # Versi yang disarankan untuk konsistensi di seluruh proyek
+        version: v1.59
+
+    - name: Run unit tests
+      run: go test -v -race -cover ./...
+      env:
+        # Variabel lingkungan untuk unit test (jika diperlukan)
+        REDIS_ADDR: localhost:6379 # Menghubungkan test ke service Redis yang berjalan
+
+    - name: Build the application binary
+      # Langkah ini memastikan aplikasi dapat di-compile dengan sukses
+      run: go build -v -o ./app .
+
+    - name: Build Docker image for validation
+      # Membangun image Docker untuk memastikan Dockerfile valid
+      run: docker build . --file Dockerfile -t local/prism-invitation-service:${{ github.sha }}

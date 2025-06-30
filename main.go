@@ -41,7 +41,9 @@ func main() {
 
 	notificationClient := notifclient.NewNotificationClient()
 
-	invitationService := service.NewInvitationService(redisClient, notificationClient, cfg.InvitationTTL)
+	realTokenGenerator := &service.UUIDTokenGenerator{}
+
+	invitationService := service.NewInvitationService(redisClient, notificationClient, realTokenGenerator, cfg.InvitationTTL)
 	invitationHandler := handler.NewInvitationHandler(invitationService)
 
 	router := gin.Default()
