@@ -3,7 +3,7 @@ module github.com/Lumina-Enterprise-Solutions/prism-invitation-service
 go 1.24.3
 
 require (
-	github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.10
+	github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.13
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-redis/redismock/v9 v9.2.0
 	github.com/google/uuid v1.6.0
@@ -86,9 +86,9 @@ require (
 	golang.org/x/net v0.41.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
-	golang.org/x/time v0.0.0-20200416051211-89c76fbcd5d1 // indirect
+	golang.org/x/time v0.12.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250519155744-55703ea1f237 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250519155744-55703ea1f237 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

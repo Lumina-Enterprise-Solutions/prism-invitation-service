@@ -1,3 +1,4 @@
+// File: services/prism-invitation-service/internal/client/notification_client.go
 package client
 
 import (
@@ -28,11 +29,11 @@ var _ NotificationClient = (*notificationClient)(nil)
 // NewNotificationClient sekarang mengembalikan interface, dan di dalamnya mengembalikan pointer ke struct
 func NewNotificationClient() NotificationClient {
 	baseURL := "http://notification-service:8080"
-	// FIX: Kembalikan pointer ke struct `notificationClient`, bukan struct `NotificationClient` itu sendiri.
-	return NotificationClient(&notificationClient{
+	// FIX: Kembalikan pointer ke struct, bukan mencoba mengkonversi ke interface.
+	return &notificationClient{
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 		baseURL:    baseURL,
-	})
+	}
 }
 
 // (Sisa file tidak perlu diubah)
