@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Config menampung semua konfigurasi untuk invitation-service.
 type Config struct {
 	Port           int
 	ServiceName    string
@@ -17,8 +18,11 @@ type Config struct {
 	VaultAddr      string
 	VaultToken     string
 	InvitationTTL  int
+	// BARU: Menambahkan URL RabbitMQ untuk koneksi ke message broker.
+	RabbitMQURL string
 }
 
+// Load memuat konfigurasi dari environment variables dan Consul.
 func Load() *Config {
 	loader, err := config.NewLoader()
 	if err != nil {
@@ -38,5 +42,8 @@ func Load() *Config {
 		InvitationTTL:  invitationTTL,
 		VaultAddr:      os.Getenv("VAULT_ADDR"),
 		VaultToken:     os.Getenv("VAULT_TOKEN"),
+		// BARU: Memuat URL RabbitMQ dari environment variable. Ini adalah praktik umum
+		// karena URL koneksi sering kali berisi kredensial.
+		RabbitMQURL: os.Getenv("RABBITMQ_URL"),
 	}
 }

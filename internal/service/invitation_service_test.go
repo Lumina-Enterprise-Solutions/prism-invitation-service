@@ -17,30 +17,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Mock untuk Dependensi ---
+// --- Mocks untuk Dependensi ---
 
-// Mock untuk NotificationClient
-type MockNotificationClient struct {
+// Mock untuk QueuePublisher (menggantikan MockNotificationClient)
+type MockQueuePublisher struct {
 	mock.Mock
 }
 
-func (m *MockNotificationClient) SendInvitationEmail(ctx context.Context, email, invitationLink string) {
-	m.Called(ctx, email, invitationLink)
+// Implementasi interface QueuePublisher
+func (m *MockQueuePublisher) Enqueue(ctx context.Context, payload client.NotificationPayload) error {
+	args := m.Called(ctx, payload)
+	return args.Error(0)
 }
 
-func (m *MockNotificationClient) SendWelcomeEmail(ctx context.Context, userID, email, firstName string) {
-	m.Called(ctx, userID, email, firstName)
+func (m *MockQueuePublisher) Close() error {
+	args := m.Called()
+	return args.Error(0)
 }
 
-var _ client.NotificationClient = (*MockNotificationClient)(nil)
+// Pastikan mock memenuhi interface.
+var _ client.QueuePublisher = (*MockQueuePublisher)(nil)
 
-// PERBAIKAN: Tambahkan MockTokenGenerator yang hilang
+// MockTokenGenerator tetap sama.
 type MockTokenGenerator struct {
 	TokenToReturn string
 }
 
 func (m *MockTokenGenerator) Generate() string {
-	// Jika token diset, kembalikan itu. Jika tidak, kembalikan string default.
 	if m.TokenToReturn != "" {
 		return m.TokenToReturn
 	}
@@ -55,46 +58,42 @@ func TestInvitationService_CreateInvitation(t *testing.T) {
 	role := "viewer"
 	ttlDuration := time.Hour * 24 * 7
 	ttlHours := 7 * 24
-
-	// Gunakan token yang sudah kita tentukan
 	fixedToken := "this-is-a-fixed-token-for-testing"
 
 	t.Run("Success", func(t *testing.T) {
 		// Arrange
 		redisClient, mockRedis := redismock.NewClientMock()
-		mockNotifClient := new(MockNotificationClient)
-		// Inject MOCK generator
+		mockPublisher := new(MockQueuePublisher) // Menggunakan mock publisher baru
 		mockTokenGen := &MockTokenGenerator{TokenToReturn: fixedToken}
-		svc := NewInvitationService(redisClient, mockNotifClient, mockTokenGen, ttlHours)
+		// DIUBAH: Inject mock publisher ke service
+		svc := NewInvitationService(redisClient, mockPublisher, mockTokenGen, ttlHours)
 
-		// Replikasi logika hashing untuk mendapatkan redisKey yang pasti
 		hash := sha256.Sum256([]byte(fixedToken))
 		tokenHash := base64.StdEncoding.EncodeToString(hash[:])
 		expectedRedisKey := fmt.Sprintf("invitation:%s", tokenHash)
-
 		expectedData := InvitationData{Email: email, Role: role}
 		expectedPayload, _ := json.Marshal(expectedData)
 
-		// Set ekspektasi dengan nilai yang PASTI
 		mockRedis.ExpectSet(expectedRedisKey, expectedPayload, ttlDuration).SetVal("OK")
-		mockNotifClient.On("SendInvitationEmail", ctx, email, mock.AnythingOfType("string")).Return()
+		// DIUBAH: Ekspektasi sekarang adalah pemanggilan Enqueue dengan payload yang benar.
+		mockPublisher.On("Enqueue", ctx, mock.AnythingOfType("client.NotificationPayload")).Return(nil).Once()
 
 		// Act
 		token, err := svc.CreateInvitation(ctx, email, role)
 
 		// Assert
 		require.NoError(t, err)
-		assert.Equal(t, fixedToken, token) // Verifikasi token yang dikembalikan
+		assert.Equal(t, fixedToken, token)
 		assert.NoError(t, mockRedis.ExpectationsWereMet())
-		mockNotifClient.AssertExpectations(t)
+		mockPublisher.AssertExpectations(t)
 	})
 
 	t.Run("Redis Failure", func(t *testing.T) {
 		// Arrange
 		redisClient, mockRedis := redismock.NewClientMock()
-		mockNotifClient := new(MockNotificationClient)
+		mockPublisher := new(MockQueuePublisher) // Gunakan mock publisher
 		mockTokenGen := &MockTokenGenerator{TokenToReturn: fixedToken}
-		svc := NewInvitationService(redisClient, mockNotifClient, mockTokenGen, ttlHours)
+		svc := NewInvitationService(redisClient, mockPublisher, mockTokenGen, ttlHours)
 		expectedError := errors.New("redis connection failed")
 
 		hash := sha256.Sum256([]byte(fixedToken))
@@ -113,10 +112,12 @@ func TestInvitationService_CreateInvitation(t *testing.T) {
 		assert.Equal(t, expectedError, err)
 		assert.Empty(t, token)
 		assert.NoError(t, mockRedis.ExpectationsWereMet())
-		mockNotifClient.AssertNotCalled(t, "SendInvitationEmail", mock.Anything, mock.Anything, mock.Anything)
+		// Verifikasi bahwa Enqueue tidak pernah dipanggil jika penyimpanan Redis gagal.
+		mockPublisher.AssertNotCalled(t, "Enqueue", mock.Anything, mock.Anything)
 	})
 }
 
+// TestValidateInvitation tidak perlu diubah karena tidak berinteraksi dengan publisher.
 func TestInvitationService_ValidateInvitation(t *testing.T) {
 	ctx := context.Background()
 	token := "valid-token-string"
@@ -127,7 +128,8 @@ func TestInvitationService_ValidateInvitation(t *testing.T) {
 
 	t.Run("Success - Valid Token", func(t *testing.T) {
 		redisClient, mockRedis := redismock.NewClientMock()
-		svc := NewInvitationService(redisClient, &MockNotificationClient{}, &MockTokenGenerator{}, 1)
+		// Kirim nil untuk publisher karena tidak digunakan di sini.
+		svc := NewInvitationService(redisClient, nil, &MockTokenGenerator{}, 1)
 
 		expectedData := InvitationData{Email: "valid.user@example.com", Role: "editor"}
 		payload, _ := json.Marshal(expectedData)
@@ -146,7 +148,7 @@ func TestInvitationService_ValidateInvitation(t *testing.T) {
 
 	t.Run("Failure - Token Not Found", func(t *testing.T) {
 		redisClient, mockRedis := redismock.NewClientMock()
-		svc := NewInvitationService(redisClient, &MockNotificationClient{}, &MockTokenGenerator{}, 1)
+		svc := NewInvitationService(redisClient, nil, &MockTokenGenerator{}, 1)
 		mockRedis.ExpectGet(expectedRedisKey).RedisNil()
 
 		data, err := svc.ValidateInvitation(ctx, "valid-token-string")

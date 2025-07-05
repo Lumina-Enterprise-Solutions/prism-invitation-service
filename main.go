@@ -15,7 +15,9 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/enhanced_logger"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/telemetry"
 	"github.com/Lumina-Enterprise-Solutions/prism-invitation-service/config"
-	notifclient "github.com/Lumina-Enterprise-Solutions/prism-invitation-service/internal/client"
+
+	// DIUBAH: Menggunakan package client yang telah dimodifikasi.
+	invitationclient "github.com/Lumina-Enterprise-Solutions/prism-invitation-service/internal/client"
 	"github.com/Lumina-Enterprise-Solutions/prism-invitation-service/internal/handler"
 	"github.com/Lumina-Enterprise-Solutions/prism-invitation-service/internal/service"
 	"github.com/gin-gonic/gin"
@@ -28,8 +30,9 @@ func main() {
 	enhanced_logger.Init()
 	cfg := config.Load()
 	serviceLogger := enhanced_logger.WithService(cfg.ServiceName)
-	enhanced_logger.LogStartup(cfg.ServiceName, cfg.Port, nil)
+	enhanced_logger.LogStartup(cfg.ServiceName, cfg.Port, map[string]interface{}{"rabbitmq_url": cfg.RabbitMQURL})
 
+	// Setup Telemetry
 	tp, err := telemetry.InitTracerProvider(cfg.ServiceName, cfg.JaegerEndpoint)
 	if err != nil {
 		serviceLogger.Fatal().Err(err).Msg("Gagal menginisialisasi tracer")
@@ -40,6 +43,7 @@ func main() {
 		}
 	}()
 
+	// Setup Redis Client
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
 	defer func() {
 		if err := redisClient.Close(); err != nil {
@@ -47,45 +51,52 @@ func main() {
 		}
 	}()
 
-	notificationClient := notifclient.NewNotificationClient()
+	// BARU: Setup RabbitMQ Publisher
+	queuePublisher, err := invitationclient.NewQueuePublisher(cfg.RabbitMQURL)
+	if err != nil {
+		serviceLogger.Fatal().Err(err).Msg("Gagal terhubung ke RabbitMQ")
+	}
+	defer func() {
+		if err := queuePublisher.Close(); err != nil {
+			serviceLogger.Error().Err(err).Msg("Gagal menutup koneksi RabbitMQ dengan benar")
+		}
+	}()
 
+	// Inisialisasi service dan handler dengan publisher baru.
 	realTokenGenerator := &service.UUIDTokenGenerator{}
-
-	invitationService := service.NewInvitationService(redisClient, notificationClient, realTokenGenerator, cfg.InvitationTTL)
+	invitationService := service.NewInvitationService(redisClient, queuePublisher, realTokenGenerator, cfg.InvitationTTL)
 	invitationHandler := handler.NewInvitationHandler(invitationService)
 
+	// Setup Gin Router
 	router := gin.Default()
 	router.Use(otelgin.Middleware(cfg.ServiceName))
-
 	p := ginprometheus.NewPrometheus("gin")
 	p.Use(router)
 
 	// --- Routes ---
 	group := router.Group("/invitations")
 	group.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "healthy"}) })
-	// Endpoint publik untuk membuat undangan (akan diproteksi oleh auth di fase berikutnya)
 	group.POST("", invitationHandler.CreateInvitation)
-	// Endpoint internal untuk validasi token oleh auth-service
 	group.POST("/validate", invitationHandler.ValidateInvitation)
 
+	// Setup Consul Service Discovery
 	regInfo := client.ServiceRegistrationInfo{
 		ServiceName:    cfg.ServiceName,
 		ServiceID:      fmt.Sprintf("%s-%d", cfg.ServiceName, cfg.Port),
 		Port:           cfg.Port,
 		HealthCheckURL: fmt.Sprintf("http://%s:%d/invitations/health", cfg.ServiceName, cfg.Port),
 	}
-
 	consulClient, err := client.RegisterService(regInfo)
 	if err != nil {
 		serviceLogger.Fatal().Err(err).Msg("Gagal mendaftar ke Consul")
 	}
 	defer client.DeregisterService(consulClient, regInfo.ServiceID)
 
+	// Start server & handle graceful shutdown
 	srv := &http.Server{
 		Addr:    ":" + strconv.Itoa(cfg.Port),
 		Handler: router,
 	}
-
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serviceLogger.Fatal().Err(err).Msg("Gagal menjalankan server HTTP")

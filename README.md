@@ -1,159 +1,111 @@
-# 💌 Prism Invitation Service <a href="https://github.com/Lumina-Enterprise-Solutions/prism-invitation-service/releases"><img src="https://img.shields.io/github/v/release/Lumina-Enterprise-Solutions/prism-invitation-service" alt="Latest Release"></a> <a href="https://github.com/Lumina-Enterprise-Solutions/prism-invitation-service/actions/workflows/ci.yml"><img src="https://github.com/Lumina-Enterprise-Solutions/prism-invitation-service/actions/workflows/ci.yml/badge.svg" alt="CI Status"></a>
+# 🔔 Prism Notification Service
 
-**Prism Invitation Service** adalah microservice yang bertanggung jawab untuk mengelola seluruh siklus hidup undangan pengguna di ekosistem Prism ERP. Layanan ini menangani pembuatan token undangan yang aman, pengiriman notifikasi, dan validasi token sekali pakai.
+Layanan notifikasi terpusat untuk ekosistem **Prism ERP**. Layanan ini bertanggung jawab untuk mengirimkan semua komunikasi keluar (email dan notifikasi real-time via WebSocket) secara andal dan terukur.
+
+<!-- Badges -->
+<p>
+  <a href="https://github.com/Lumina-Enterprise-Solutions/prism-notification-service/actions/workflows/ci.yml">
+    <img src="https://github.com/Lumina-Enterprise-Solutions/prism-notification-service/actions/workflows/ci.yml/badge.svg" alt="CI Pipeline">
+  </a>
+  <a href="https://github.com/Lumina-Enterprise-Solutions/prism-notification-service/actions/workflows/release.yml">
+    <img src="https://github.com/Lumina-Enterprise-Solutions/prism-notification-service/actions/workflows/release.yml/badge.svg" alt="Release Pipeline">
+  </a>
+  <a href="https://github.com/Lumina-Enterprise-Solutions/prism-notification-service/pkgs/container/prism-notification-service">
+    <img src="https://img.shields.io/github/v/release/Lumina-Enterprise-Solutions/prism-notification-service?label=ghcr.io&color=blue" alt="GHCR Package">
+  </a>
+  <a href="https://goreportcard.com/report/github.com/Lumina-Enterprise-Solutions/prism-notification-service">
+    <img src="https://goreportcard.com/badge/github.com/Lumina-Enterprise-Solutions/prism-notification-service" alt="Go Report Card">
+  </a>
+</p>
+
+---
+
+## ✨ Fitur Utama
+
+-   **Pemrosesan Asinkron**: Menggunakan **RabbitMQ** sebagai *message broker* untuk menerima permintaan notifikasi secara cepat, memastikan layanan pengirim tidak terblokir.
+-   **Notifikasi Multi-Channel**:
+    -   **Email**: Pengiriman email menggunakan template HTML dinamis.
+    -   **Real-time (WebSocket)**: Memberikan notifikasi instan kepada pengguna yang sedang online.
+-   **Andal & Tangguh**: Jika pengiriman email gagal, job akan dicoba ulang beberapa kali sebelum dipindahkan ke *Dead-Letter Queue* (DLQ) untuk inspeksi manual.
+-   **Observabilitas**: Terintegrasi penuh dengan **OpenTelemetry (Jaeger)** dan **Prometheus** untuk pemantauan end-to-end.
+-   **Manajemen Rahasia**: Mengambil kredensial SMTP secara aman dari **HashiCorp Vault**.
 
 ---
 
 ## 🏗️ Arsitektur & Alur Kerja
 
-Layanan ini beroperasi sebagai komponen stateful yang ringan, mengandalkan Redis untuk persistensi sementara dan berinteraksi dengan layanan lain untuk fungsionalitas penuh.
-
-### Tanggung Jawab Utama:
--   **Membuat Undangan**: Menerima permintaan untuk mengundang pengguna baru dengan email dan peran tertentu.
--   **Menghasilkan Token Aman**: Membuat token unik yang tidak dapat diprediksi untuk setiap undangan.
--   **Penyimpanan Sementara**: Menyimpan *hash* dari token beserta data undangan (email, peran) di **Redis** dengan Time-To-Live (TTL) yang dapat dikonfigurasi.
--   **Memberi Notifikasi**: Berkomunikasi dengan **Prism Notification Service** untuk mengirim email undangan kepada pengguna.
--   **Memvalidasi Token**: Menyediakan endpoint internal yang aman bagi **Prism Auth Service** untuk memverifikasi validitas token dan mengambil data undangan. Token akan dihapus setelah berhasil divalidasi.
-
-### Alur Kerja Pembuatan Undangan
+Layanan ini memisahkan penerimaan permintaan dari proses pengiriman untuk meningkatkan skalabilitas dan ketahanan.
 
 ```mermaid
-sequenceDiagram
-    participant 👤 as Admin/Manajer
-    participant 🌐 as API Gateway
-    participant 📨 as Invitation Service
-    participant 🗄️ as Redis Cache
-    participant 📧 as Notification Service
-    
-    Note over 👤, 📧: 🚀 Proses Undangan Pengguna Baru
-    
-    👤->>🌐: POST /invitations<br/>📝 {email, role}
-    
-    Note right of 🌐: Validasi Request
-    🌐->>+📨: CreateInvitation(email, role)
-    
-    Note over 📨: 🔐 Security Processing
-    📨->>📨: 🎲 Generate unique token<br/>(UUID v4)
-    📨->>📨: 🔒 Hash token<br/>(SHA256)
-    
-    Note over 📨, 🗄️: 💾 Temporary Storage
-    📨->>+🗄️: SETEX "invitation:<hash>"<br/>⏰ TTL: 24h<br/>📋 "{email, role, timestamp}"
-    🗄️-->>-📨: ✅ OK - Data tersimpan
-    
-    Note over 📨, 📧: 📬 Email Notification
-    📨->>+📧: SendInvitationEmail<br/>📧 email: target@domain.com<br/>🔗 link: /accept?token=xyz
-    
-    Note right of 📧: Email dalam antrian
-    📧-->>-📨: ✅ Accepted (Async)
-    
-    📨-->>-🌐: 🎉 201 Created<br/>{"id": "inv_123", "status": "sent"}
-    
-    Note over 🌐: Response Success
-    🌐-->>👤: 🎊 {"message": "undangan berhasil dikirim",<br/>"invitation_id": "inv_123",<br/>"expires_at": "2025-07-01T10:00:00Z"}
-    
-    Note over 👤, 📧: ✨ Undangan siap digunakan dalam 24 jam
+graph TD
+    A[Service Lain] -->|Publish Event| B{RabbitMQ Exchange};
+    B --> C(Antrian Notifikasi);
+    subgraph Background Worker
+        D[Worker Consumer] -->|Dequeue| C;
+        D --> E{Kirim via WebSocket};
+        D --> F{Kirim via Email};
+    end
+    F --> G[Server SMTP];
+    subgraph Real-time
+      H[Frontend Client] <-->|WebSocket| I(API: /notifications/ws);
+      I <--> J[Hub];
+      E --> J;
+    end
 ```
 
 ---
 
 ## 🔌 API Endpoints
 
-Layanan ini mengekspos dua endpoint utama yang dirutekan melalui API Gateway.
+Semua endpoint berada di bawah prefix `/notifications`.
 
-| Method | Path                      | Deskripsi                                                                 | Body Permintaan (Request)              |
-| :----- | :------------------------ | :------------------------------------------------------------------------ | :------------------------------------- |
-| `POST` | `/invitations`            | Membuat undangan baru dan mengirimkannya melalui email.                   | `{"email": "string", "role": "string"}` |
-| `POST` | `/invitations/validate`   | **(Internal)** Memvalidasi token undangan dan mengembalikan data terkait. | `{"token": "string"}`                  |
+| Metode | Path      | Deskripsi                                                        | Otentikasi? |
+|:-------|:----------|:-----------------------------------------------------------------|:-----------:|
+| `POST` | `/send`   | Menerima & memasukkan notifikasi ke dalam antrian pemrosesan.    | Tidak       |
+| `GET`  | `/ws`     | Meng-upgrade koneksi HTTP ke WebSocket untuk notifikasi real-time. | **Ya (JWT)**|
+| `GET`  | `/health` | Health check endpoint untuk monitoring dan service discovery.    | Tidak       |
 
----
+### Body Request untuk `POST /send`
 
-## ⚙️ Konfigurasi
-
-Konfigurasi layanan dimuat dari **Consul** saat startup, dengan rahasia diambil dari **Vault**.
-
--   **Variabel Lingkungan yang Dibutuhkan**:
-    -   `VAULT_ADDR`: Alamat instance HashiCorp Vault.
-    -   `VAULT_TOKEN`: Token untuk otentikasi dengan Vault.
-
--   **Konfigurasi dari Consul** (di bawah path `config/prism-invitation-service/`):
-    -   `port`: Port server HTTP (default: `8080`).
-    -   `invitation_ttl_hours`: Masa berlaku token undangan dalam jam (default: `168` / 7 hari).
-
--   **Konfigurasi Global dari Consul**:
-    -   `config/global/jaeger_endpoint`: Alamat untuk Jaeger (tracing).
-    -   `config/global/redis_addr`: Alamat instance Redis.
-
----
-
-## 🚀 Menjalankan & Menguji Layanan
-
-### Menjalankan dalam Ekosistem Lengkap (Disarankan)
-
-Cara terbaik untuk menjalankan layanan ini adalah sebagai bagian dari tumpukan infrastruktur Prism yang lengkap.
-
-1.  Pastikan Anda berada di direktori `infra` dari monorepo.
-2.  Jalankan perintah berikut:
-    ```bash
-    make local-up
-    ```
-    Ini akan membangun dan menjalankan semua layanan, termasuk `prism-invitation-service`, dengan semua dependensi yang diperlukan.
-
-### Menjalankan Secara Mandiri (Untuk Pengujian Terisolasi)
-
-Anda dapat menjalankan layanan ini secara terpisah menggunakan Makefile lokalnya.
-
-```bash
-# Menginstal dependensi
-go mod tidy
-
-# Menjalankan unit tests
-make test
-
-# Menjalankan linter untuk memeriksa kualitas kode
-make lint
-
-# Membangun binary aplikasi
-make build
-
-# Menjalankan aplikasi (membutuhkan Redis yang berjalan)
-make run
+```json
+{
+  "recipient_id": "user-uuid-123",
+  "recipient": "user.email@example.com",
+  "subject": "Judul Notifikasi",
+  "template_name": "welcome.html",
+  "template_data": {
+    "FirstName": "John"
+  }
+}
 ```
 
----
-
-## 🔄 Alur Kerja Kontribusi (Git Flow)
-
-Kami menggunakan alur kerja standar yang didukung oleh `Makefile.ops` untuk menjaga konsistensi.
-
-1.  **Sinkronkan branch Anda**:
-    ```bash
-    make -f Makefile.ops sync
-    ```
-2.  **Buat branch fitur baru**:
-    ```bash
-    make -f Makefile.ops feature name=deskripsi-fitur-baru
-    ```
-3.  **Lakukan perubahan kode Anda**.
-
-4.  **Buat Pull Request**:
-    Setelah Anda siap, dorong (push) branch Anda ke remote dan jalankan:
-    ```bash
--    make -f Makefile.ops pr
-+    make -f Makefile.ops pr # ATAU 'make pr' jika Makefile utama mengimpor Makefile.ops
-    ```
-    Perintah ini akan membuka halaman pembuatan Pull Request di browser Anda.
+-   **Respons Sukses**: `202 Accepted` - Permintaan berhasil diterima.
+-   **Respons Gagal**: `400 Bad Request` atau `500 Internal Server Error`.
 
 ---
+<details>
+<summary><b>🔑 Konfigurasi & Variabel Lingkungan</b></summary>
 
-##  CI/CD Pipeline
+| Variabel        | Deskripsi                       | Default            | Dari Vault? |
+|:----------------|:--------------------------------|:-------------------|:-----------:|
+| `PORT`          | Port server HTTP.               | `8082`             | Tidak       |
+| `REDIS_ADDR`    | Alamat Redis.                   | `cache-redis:6379` | Tidak       |
+| `RABBITMQ_URL`  | URL koneksi ke RabbitMQ.        | -                  | Tidak       |
+| `JAEGER_ENDPOINT`| Alamat kolektor Jaeger.         | `jaeger:4317`      | Tidak       |
+| `VAULT_ADDR`    | Alamat HashiCorp Vault.         | `http://vault:8200`| Tidak       |
+| `VAULT_TOKEN`   | Token untuk Vault.              | `root-token-for-dev`| Tidak       |
+| `MAILTRAP_HOST` | Host server SMTP.               | -                  | **Ya**      |
+| `MAILTRAP_PORT` | Port server SMTP.               | -                  | **Ya**      |
+| `MAILTRAP_USER` | Username otentikasi SMTP.       | -                  | **Ya**      |
+| `MAILTRAP_PASS` | Password otentikasi SMTP.       | -                  | **Ya**      |
 
-Repositori ini dilengkapi dengan dua pipeline GitHub Actions:
+</details>
 
--   **`ci.yml`**: Berjalan pada setiap *push* dan *pull request*. Pipeline ini melakukan:
-    -   Linting kode.
-    -   Menjalankan unit tests (dengan service container Redis).
-    -   Membangun binary dan image Docker untuk validasi.
+---
 
--   **`release.yml`**: Berjalan ketika sebuah tag `v*` (contoh: `v1.2.0`) di-push. Pipeline ini melakukan:
-    -   Membangun dan mem-push image Docker ke GitHub Container Registry (GHCR).
-    -   Membuat GitHub Release baru secara otomatis beserta catatan rilisnya.
+## 🚀 Pengembangan Lokal
+
+-   **Jalankan**: `make run` (memerlukan Vault, Redis & RabbitMQ berjalan).
+-   **Uji**: `make test`
+-   **Lint**: `make lint`
+-   **Build Docker**: `make docker-build`

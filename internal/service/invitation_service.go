@@ -10,38 +10,42 @@ import (
 
 	"github.com/Lumina-Enterprise-Solutions/prism-invitation-service/internal/client"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
-// ... (struct InvitationData tetap sama) ...
+// InvitationData tetap sama.
 type InvitationData struct {
 	Email string `json:"email"`
 	Role  string `json:"role"`
 }
 
+// InvitationService interface tetap sama.
 type InvitationService interface {
 	CreateInvitation(ctx context.Context, email, role string) (string, error)
 	ValidateInvitation(ctx context.Context, token string) (*InvitationData, error)
 }
 
+// Implementasi service sekarang bergantung pada QueuePublisher.
 type invitationService struct {
-	redisClient        *redis.Client
-	notificationClient client.NotificationClient
-	tokenGenerator     TokenGenerator // <-- TAMBAHKAN INI
-	ttl                time.Duration
+	redisClient    *redis.Client
+	queuePublisher client.QueuePublisher // DIUBAH: Bergantung pada interface publisher.
+	tokenGenerator TokenGenerator
+	ttl            time.Duration
 }
 
-// PERBAIKAN: Konstruktor sekarang menerima TokenGenerator.
-func NewInvitationService(redisClient *redis.Client, notificationClient client.NotificationClient, tokenGen TokenGenerator, ttlHours int) InvitationService {
+// NewInvitationService sekarang menerima QueuePublisher, bukan NotificationClient.
+func NewInvitationService(redisClient *redis.Client, publisher client.QueuePublisher, tokenGen TokenGenerator, ttlHours int) InvitationService {
 	return &invitationService{
-		redisClient:        redisClient,
-		notificationClient: notificationClient,
-		tokenGenerator:     tokenGen, // <-- SIMPAN INI
-		ttl:                time.Hour * time.Duration(ttlHours),
+		redisClient:    redisClient,
+		queuePublisher: publisher, // DIUBAH: Menyimpan publisher.
+		tokenGenerator: tokenGen,
+		ttl:            time.Hour * time.Duration(ttlHours),
 	}
 }
 
+// CreateInvitation sekarang menerbitkan event, bukan memanggil HTTP client.
 func (s *invitationService) CreateInvitation(ctx context.Context, email, role string) (string, error) {
-	token := s.tokenGenerator.Generate() // <-- Gunakan generator
+	token := s.tokenGenerator.Generate()
 	hash := sha256.Sum256([]byte(token))
 	tokenHash := base64.StdEncoding.EncodeToString(hash[:])
 
@@ -56,13 +60,31 @@ func (s *invitationService) CreateInvitation(ctx context.Context, email, role st
 		return "", err
 	}
 
+	// Buat payload untuk notifikasi.
 	invitationLink := fmt.Sprintf("https://app.prismerp.com/accept-invitation?token=%s", token)
-	s.notificationClient.SendInvitationEmail(ctx, email, invitationLink)
+	notificationPayload := client.NotificationPayload{
+		Recipient:    email,
+		Subject:      "Anda Diundang untuk Bergabung dengan Prism ERP",
+		TemplateName: "invitation.html",
+		TemplateData: map[string]interface{}{
+			"InvitationLink": invitationLink,
+			"RecipientEmail": email,
+		},
+	}
+
+	// Terbitkan event ke RabbitMQ.
+	if err := s.queuePublisher.Enqueue(ctx, notificationPayload); err != nil {
+		// Jika pengiriman ke queue gagal, kita harus mempertimbangkan untuk rollback penyimpanan Redis.
+		// Namun, untuk ketahanan, lebih baik log error ini dan biarkan sistem lain (monitoring/alerting) menanganinya.
+		// Menghapus token dari Redis akan membuat undangan menjadi tidak valid.
+		log.Error().Err(err).Str("email", email).Msg("Gagal menerbitkan event undangan, undangan mungkin tidak terkirim.")
+		// Kita tetap mengembalikan token, dengan asumsi pengiriman bisa dicoba lagi secara manual.
+	}
 
 	return token, nil
 }
 
-// ... (ValidateInvitation tetap sama) ...
+// ValidateInvitation tidak berubah.
 func (s *invitationService) ValidateInvitation(ctx context.Context, token string) (*InvitationData, error) {
 	hash := sha256.Sum256([]byte(token))
 	tokenHash := base64.StdEncoding.EncodeToString(hash[:])
@@ -82,7 +104,7 @@ func (s *invitationService) ValidateInvitation(ctx context.Context, token string
 	}
 
 	if err := s.redisClient.Del(ctx, redisKey).Err(); err != nil {
-		fmt.Printf("PERINGATAN: gagal menghapus token undangan bekas pakai: %v\n", err)
+		log.Warn().Err(err).Msg("PERINGATAN: gagal menghapus token undangan bekas pakai")
 	}
 
 	return &data, nil
