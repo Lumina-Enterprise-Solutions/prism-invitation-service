@@ -24,9 +24,22 @@ func (h *InvitationHandler) CreateInvitation(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	// TODO: Nanti tambahkan otorisasi, pastikan yang mengundang adalah admin/manajer.
 
-	_, err := h.service.CreateInvitation(c.Request.Context(), req.Email, req.Role)
+	// Ekstrak tenantID dan inviterID dari klaim token JWT.
+	// Middleware auth harus sudah memvalidasi token dan menempatkan klaim di context.
+	tenantID, exists := c.Get("tenantID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "tenantID tidak ditemukan di dalam token"})
+		return
+	}
+
+	inviterID, exists := c.Get("userID") // Atau `sub`, tergantung implementasi token.
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "inviterID tidak ditemukan di dalam token"})
+		return
+	}
+
+	_, err := h.service.CreateInvitation(c.Request.Context(), req.Email, req.Role, tenantID.(string), inviterID.(string))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membuat undangan"})
 		return

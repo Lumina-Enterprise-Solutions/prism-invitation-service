@@ -20,8 +20,8 @@ type MockInvitationService struct {
 	mock.Mock
 }
 
-func (m *MockInvitationService) CreateInvitation(ctx context.Context, email, role string) (string, error) {
-	args := m.Called(ctx, email, role)
+func (m *MockInvitationService) CreateInvitation(ctx context.Context, email, role, tenantID, inviterID string) (string, error) {
+	args := m.Called(ctx, email, role, tenantID, inviterID)
 	return args.String(0), args.Error(1)
 }
 
@@ -45,10 +45,18 @@ func setupTestRouter(handler *InvitationHandler) *gin.Engine {
 func TestInvitationHandler_CreateInvitation(t *testing.T) {
 	mockService := new(MockInvitationService)
 	handler := NewInvitationHandler(mockService)
-	router := setupTestRouter(handler)
+
+	// Setup router with a middleware to inject auth context
+	gin.SetMode(gin.TestMode)
+	router := gin.Default()
+	router.POST("/invitations", func(c *gin.Context) {
+		c.Set("tenantID", "test-tenant")
+		c.Set("userID", "test-inviter")
+		handler.CreateInvitation(c)
+	})
 
 	t.Run("Success", func(t *testing.T) {
-		mockService.On("CreateInvitation", mock.Anything, "test@example.com", "admin").Return("new-token", nil).Once()
+		mockService.On("CreateInvitation", mock.Anything, "test@example.com", "admin", "test-tenant", "test-inviter").Return("new-token", nil).Once()
 
 		payload := `{"email": "test@example.com", "role": "admin"}`
 		req, _ := http.NewRequest(http.MethodPost, "/invitations", bytes.NewBufferString(payload))
@@ -63,6 +71,7 @@ func TestInvitationHandler_CreateInvitation(t *testing.T) {
 	})
 
 	t.Run("Bad Request - Missing Email", func(t *testing.T) {
+		// No mock expectation needed as it fails on binding
 		payload := `{"role": "admin"}` // Email tidak ada
 		req, _ := http.NewRequest(http.MethodPost, "/invitations", bytes.NewBufferString(payload))
 		req.Header.Set("Content-Type", "application/json")

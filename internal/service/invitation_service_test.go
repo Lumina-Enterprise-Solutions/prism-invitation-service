@@ -56,6 +56,8 @@ func TestInvitationService_CreateInvitation(t *testing.T) {
 	ctx := context.Background()
 	email := "new.user@example.com"
 	role := "viewer"
+	tenantID := "tenant-123"
+	inviterID := "inviter-456"
 	ttlDuration := time.Hour * 24 * 7
 	ttlHours := 7 * 24
 	fixedToken := "this-is-a-fixed-token-for-testing"
@@ -71,7 +73,7 @@ func TestInvitationService_CreateInvitation(t *testing.T) {
 		hash := sha256.Sum256([]byte(fixedToken))
 		tokenHash := base64.StdEncoding.EncodeToString(hash[:])
 		expectedRedisKey := fmt.Sprintf("invitation:%s", tokenHash)
-		expectedData := InvitationData{Email: email, Role: role}
+		expectedData := InvitationData{Email: email, Role: role, TenantID: tenantID}
 		expectedPayload, _ := json.Marshal(expectedData)
 
 		mockRedis.ExpectSet(expectedRedisKey, expectedPayload, ttlDuration).SetVal("OK")
@@ -79,7 +81,7 @@ func TestInvitationService_CreateInvitation(t *testing.T) {
 		mockPublisher.On("Enqueue", ctx, mock.AnythingOfType("client.NotificationPayload")).Return(nil).Once()
 
 		// Act
-		token, err := svc.CreateInvitation(ctx, email, role)
+		token, err := svc.CreateInvitation(ctx, email, role, tenantID, inviterID)
 
 		// Assert
 		require.NoError(t, err)
@@ -99,13 +101,13 @@ func TestInvitationService_CreateInvitation(t *testing.T) {
 		hash := sha256.Sum256([]byte(fixedToken))
 		tokenHash := base64.StdEncoding.EncodeToString(hash[:])
 		expectedRedisKey := fmt.Sprintf("invitation:%s", tokenHash)
-		expectedData := InvitationData{Email: email, Role: role}
+		expectedData := InvitationData{Email: email, Role: role, TenantID: tenantID}
 		expectedPayload, _ := json.Marshal(expectedData)
 
 		mockRedis.ExpectSet(expectedRedisKey, expectedPayload, ttlDuration).SetErr(expectedError)
 
 		// Act
-		token, err := svc.CreateInvitation(ctx, email, role)
+		token, err := svc.CreateInvitation(ctx, email, role, tenantID, inviterID)
 
 		// Assert
 		require.Error(t, err)

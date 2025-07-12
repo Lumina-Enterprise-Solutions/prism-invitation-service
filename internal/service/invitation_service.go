@@ -15,13 +15,14 @@ import (
 
 // InvitationData tetap sama.
 type InvitationData struct {
-	Email string `json:"email"`
-	Role  string `json:"role"`
+	Email    string `json:"email"`
+	Role     string `json:"role"`
+	TenantID string `json:"tenantID"`
 }
 
 // InvitationService interface tetap sama.
 type InvitationService interface {
-	CreateInvitation(ctx context.Context, email, role string) (string, error)
+	CreateInvitation(ctx context.Context, email, role, tenantID, inviterID string) (string, error)
 	ValidateInvitation(ctx context.Context, token string) (*InvitationData, error)
 }
 
@@ -44,13 +45,13 @@ func NewInvitationService(redisClient *redis.Client, publisher client.QueuePubli
 }
 
 // CreateInvitation sekarang menerbitkan event, bukan memanggil HTTP client.
-func (s *invitationService) CreateInvitation(ctx context.Context, email, role string) (string, error) {
+func (s *invitationService) CreateInvitation(ctx context.Context, email, role, tenantID, inviterID string) (string, error) {
 	token := s.tokenGenerator.Generate()
 	hash := sha256.Sum256([]byte(token))
 	tokenHash := base64.StdEncoding.EncodeToString(hash[:])
 
 	redisKey := fmt.Sprintf("invitation:%s", tokenHash)
-	invitationData := InvitationData{Email: email, Role: role}
+	invitationData := InvitationData{Email: email, Role: role, TenantID: tenantID}
 	payload, err := json.Marshal(invitationData)
 	if err != nil {
 		return "", err
