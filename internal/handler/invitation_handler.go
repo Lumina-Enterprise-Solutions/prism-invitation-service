@@ -1,8 +1,10 @@
+// File: services/prism-invitation-service/internal/handler/invitation_handler.go (FINAL)
 package handler
 
 import (
 	"net/http"
 
+	commonauth "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
 	"github.com/Lumina-Enterprise-Solutions/prism-invitation-service/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -25,21 +27,19 @@ func (h *InvitationHandler) CreateInvitation(c *gin.Context) {
 		return
 	}
 
-	// Ekstrak tenantID dan inviterID dari klaim token JWT.
-	// Middleware auth harus sudah memvalidasi token dan menempatkan klaim di context.
-	tenantID, exists := c.Get("tenantID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "tenantID tidak ditemukan di dalam token"})
+	tenantID, err := commonauth.GetTenantID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant_id tidak ditemukan di dalam token"})
 		return
 	}
 
-	inviterID, exists := c.Get("userID") // Atau `sub`, tergantung implementasi token.
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "inviterID tidak ditemukan di dalam token"})
+	inviterID, err := commonauth.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id tidak ditemukan di dalam token"})
 		return
 	}
 
-	_, err := h.service.CreateInvitation(c.Request.Context(), req.Email, req.Role, tenantID.(string), inviterID.(string))
+	_, err = h.service.CreateInvitation(c.Request.Context(), req.Email, req.Role, tenantID, inviterID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membuat undangan"})
 		return
